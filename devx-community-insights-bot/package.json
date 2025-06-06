@@ -1,0 +1,29 @@
+{
+  "name": "devx-community-insights-bot",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "nodemon --watch src --exec tsx src/index.ts",
+    "build": "tsc",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint ./src --ext .ts",
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "pretest": "npm run lint && npm run type-check",
+    "prebuild": "npm test"
+  },
+  "dependencies": {
+    "@microsoft/teams-ai": "^1.0.0-preview"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "nodemon": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}
