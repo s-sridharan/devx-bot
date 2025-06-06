@@ -1,1 +1,1 @@
-# devx-bot
+# DevX Bot
