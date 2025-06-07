@@ -206,7 +206,7 @@ export class GitHubTool {
         metadata: {
           search_url: '',
           rate_limit_reset: '',
-          ingested_at,
+          ingested_at: ingestedAt,
           success: false,
           error: error.message
         }
@@ -252,8 +252,8 @@ export class GitHubTool {
     // Add repository filter
     const repositories = params.repositories || this.config.defaultRepositories;
     if (repositories) {
-      const repos = repositories.split(',').map(r => r.trim());
-      searchQuery += ` repo:${repos.join(' repo:')}`;
+    const repos = repositories.split(',').map((r: string) => r.trim());  // ✅ Fixed: added (r: string)
+    searchQuery += ` repo:${repos.join(' repo:')}`;
     }
     
     // Add state filter
@@ -269,10 +269,10 @@ export class GitHubTool {
     
     // Add labels filter
     if (params.labels) {
-      const labels = params.labels.split(',').map(l => l.trim());
-      for (const label of labels) {
+    const labels = params.labels.split(',').map((l: string) => l.trim());  // ✅ Fixed: added (l: string)
+    for (const label of labels) {
         searchQuery += ` label:"${label}"`;
-      }
+    }
     }
 
     // Build URL parameters
@@ -377,7 +377,7 @@ export class GitHubTool {
       metadata: {
         search_url: searchUrl,
         rate_limit_reset: rateLimitReset,
-        ingested_at,
+        ingested_at: ingestedAt,
         success: true
       }
     };

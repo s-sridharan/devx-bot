@@ -183,7 +183,7 @@ export class StackOverflowTool {
         metadata: {
           search_url: '',
           rate_limit_remaining: 0,
-          ingested_at,
+          ingested_at: ingestedAt,
           success: false,
           error: error.message
         }
@@ -323,7 +323,7 @@ export class StackOverflowTool {
       metadata: {
         search_url: searchUrl,
         rate_limit_remaining: data.quota_remaining || 0,
-        ingested_at,
+        ingested_at : ingestedAt,
         success: true
       }
     };

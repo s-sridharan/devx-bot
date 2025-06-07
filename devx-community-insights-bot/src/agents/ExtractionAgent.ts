@@ -1,5 +1,6 @@
 // src/agents/ExtractionAgent.ts - Transform raw feedback into structured pain points
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 
 import { IChatModel } from '@microsoft/teams.ai';
 import { 
@@ -133,17 +134,20 @@ export class ExtractionAgent {
     
     // Execute AI analysis
     const result = await this.model.send({
-      role: 'user',
-      content: prompt
+    role: 'user',
+    content: prompt
     });
-    
+
+    // Add null check for result.content
+    const resultContent = result.content || '';
+
     // Parse AI response
-    const painPoints = this.parseExtractionResult(result.content, batch);
+    const painPoints = this.parseExtractionResult(resultContent, batch);
     
     return {
-      painPoints,
-      modelCalls: 1,
-      tokensUsed: this.estimateTokens(prompt) + this.estimateTokens(result.content)
+    painPoints,
+    modelCalls: 1,
+    tokensUsed: this.estimateTokens(prompt) + this.estimateTokens(resultContent)
     };
   }
 
@@ -366,9 +370,12 @@ IMPORTANT: Return ONLY the JSON array. No additional text, explanations, or mark
       : 0;
     
     const dataCompleteness = painPoints.length > 0 
-      ? painPoints.filter(pp => pp.technical_details.error_messages.length > 0 || pp.affected_components.length > 0).length / painPoints.length
-      : 0;
-    
+        ? painPoints.filter(pp => 
+            (pp.technical_details?.error_messages?.length ?? 0) > 0 || 
+            pp.affected_components.length > 0
+        ).length / painPoints.length
+        : 0;
+        
     const categorizationCertainty = painPoints.length > 0
       ? painPoints.filter(pp => pp.confidence > 0.7).length / painPoints.length
       : 0;
