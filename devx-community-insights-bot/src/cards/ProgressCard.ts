@@ -91,7 +91,7 @@ export class ProgressCard {
     
     const card = {
       type: 'AdaptiveCard',
-      version: '1.4',
+      version: '1.2',
       schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
       body: [
         // Error Header

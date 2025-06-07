@@ -1,16 +1,40 @@
-// Minimal working solution focused on assignment requirements
+
+// // Enhanced Community Insights Bot with full agent chain integration
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
+import { Application, TurnState, TeamsAdapter } from '@microsoft/teams-ai'; // Add this line
+
 import { config } from 'dotenv';
 import restify from 'restify';
 import { ChatPrompt, IChatModel, Message, ModelMessage } from '@microsoft/teams.ai';
 import { McpClientPlugin } from '@microsoft/teams.mcpclient';
 import {
   ActivityTypes,
-  TurnContext
+  TurnContext,
+  MessageFactory,
+  CardFactory,
+  ConfigurationServiceClientCredentialFactory, // Add this
+  MemoryStorage // Add this
 } from 'botbuilder';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// Import all new components
+import { ExtractionAgent } from './agents/ExtractionAgent';
+import { ResponseAgent } from './agents/ResponseAgent';
+import { AgentChain } from './orchestration/AgentChain';
+import { ProgressCard } from './cards/ProgressCard';
+import { InsightsCard } from './cards/InsightsCard';
+import { ActionHandler } from './cards/ActionHandler';
+import { GitHubTool } from './tools/GitHubTool';
+import { StackOverflowTool } from './tools/StackOverflowTool';
+import { 
+  RawFeedbackItem, 
+  AgentExecutionContext,
+  ProgressUpdate,
+  AgentChainResult 
+} from './types/index';
 
-config();
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 config();
 
@@ -20,11 +44,18 @@ console.log('Model:', process.env.AZURE_OPENAI_MODEL);
 console.log('API Version:', process.env.AZURE_OPENAI_API_VERSION);
 console.log('API Key:', process.env.AZURE_OPENAI_KEY ? 'SET' : 'MISSING');
 
+// ✅ ADD THIS DEBUG CODE temporarily
+console.log('🔐 DEBUG Bot Credentials:');
+console.log('BOT_ID from env:', process.env.BOT_ID);
+console.log('BOT_PASSWORD from env:', process.env.BOT_PASSWORD ? 'SET (length: ' + process.env.BOT_PASSWORD.length + ')' : 'MISSING');
+console.log('BOT_TENANT_ID from env:', process.env.BOT_TENANT_ID);
+console.log('Current working directory:', process.cwd());
+
+// Keep your working MinimalOpenAIModel implementation
 class MinimalOpenAIModel implements IChatModel {
   constructor(private apiKey: string, private model: string, private endpoint?: string) {}
 
   async send(input: Message): Promise<ModelMessage> {
-    // Use your actual Azure OpenAI configuration
     const url = `${this.endpoint}/openai/deployments/${this.model}/chat/completions?api-version=${process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview'}`;
     
     console.log('🤖 Calling Azure OpenAI URL:', url);
@@ -50,8 +81,6 @@ class MinimalOpenAIModel implements IChatModel {
       top_p: 1.0
     };
 
-    console.log('🤖 Request body:', JSON.stringify(body, null, 2));
-
     const res = await fetch(url, {
       method: 'POST',
       headers,
@@ -65,7 +94,6 @@ class MinimalOpenAIModel implements IChatModel {
     }
 
     const json = await res.json() as any;
-    console.log('🤖 Azure OpenAI Response:', JSON.stringify(json, null, 2));
 
     if (!json.choices || !json.choices[0] || !json.choices[0].message) {
       console.error('❌ Invalid Azure OpenAI response:', json);
@@ -79,8 +107,141 @@ class MinimalOpenAIModel implements IChatModel {
   }
 }
 
+// Initialize model and components
+const model = new MinimalOpenAIModel(
+  process.env.AZURE_OPENAI_KEY || '',
+  process.env.AZURE_OPENAI_MODEL || 'gpt-4o-mini',
+  process.env.AZURE_OPENAI_ENDPOINT || ''
+);
 
-// MCP Tools Implementation (Core Assignment Requirement)
+// Initialize all new components
+const githubTool = new GitHubTool({
+  token: process.env.GITHUB_TOKEN,
+  maxResults: 20,
+  defaultRepositories: 'microsoft/teams-ai,microsoft/botframework'
+});
+
+const stackOverflowTool = new StackOverflowTool({
+  apiKey: process.env.STACKOVERFLOW_API_KEY,
+  maxResults: 20,
+  defaultTags: 'microsoft-teams,botframework'
+});
+
+const agentChain = new AgentChain(model);
+const progressCard = new ProgressCard({ show_technical_details: true });
+const insightsCard = new InsightsCard({ show_technical_metrics: true });
+const actionHandler = new ActionHandler(model, githubTool, stackOverflowTool);
+
+// ✅ ADD THIS: Teams AI adapter and application setup
+const adapter = new TeamsAdapter(
+    {},
+    new ConfigurationServiceClientCredentialFactory({
+        MicrosoftAppId: process.env.BOT_ID,
+        MicrosoftAppPassword: process.env.BOT_PASSWORD,
+        MicrosoftAppTenantId: process.env.BOT_TENANT_ID,
+        MicrosoftAppType: 'SingleTenant'
+    })
+);
+
+const onTurnErrorHandler = async (context: TurnContext, error: any) => {
+    console.error(`\n [onTurnError] unhandled error: ${error}`);
+    await context.sendActivity('The bot encountered an error or bug.');
+};
+
+adapter.onTurnError = onTurnErrorHandler;
+
+interface ConversationState {
+    count: number;
+}
+type ApplicationTurnState = TurnState<ConversationState>;
+
+const storage = new MemoryStorage();
+const app = new Application<ApplicationTurnState>({
+    storage
+});
+
+// ✅ ADD THIS: Message handler using your existing logic
+app.activity(ActivityTypes.Message, async (context: TurnContext, state: ApplicationTurnState) => {
+    const userText = context.activity.text?.trim();
+    
+    if (userText?.toLowerCase().includes('analyze')) {
+        try {
+            console.log('🎯 Processing analysis request:', userText);
+            const resultCard = await processInsightRequestForWebChat(userText);
+            
+            await context.sendActivity({
+                attachments: [{
+                    contentType: 'application/vnd.microsoft.card.adaptive',
+                    content: resultCard
+                }]
+            });
+            return;
+        } catch (error: any) {
+            console.error('❌ Analysis error:', error);
+            await context.sendActivity(`❌ Error: ${error.message}`);
+            return;
+        }
+    }
+
+    // Default echo for other messages
+    let count = state.conversation.count ?? 0;
+    state.conversation.count = ++count;
+    await context.sendActivity(`[${count}] you said: ${userText}`);
+});
+
+// Keep your MCP prompt setup
+const prompt = new ChatPrompt<
+  Record<string, unknown>,
+  [McpClientPlugin]
+>(
+  {
+    instructions: `You are the Community Insights AI Engine for Microsoft Teams Platform Operations team.
+
+MISSION: Help Ops team proactively identify and prioritize developer pain points from community feedback to improve Teams Platform developer experience.
+
+CONTEXT: You analyze feedback from Stack Overflow and GitHub to surface actionable insights for:
+- Bot Framework SDK issues
+- Teams JavaScript/TypeScript SDK problems  
+- Graph API integration challenges
+- Adaptive Cards implementation issues
+- Authentication and SSO difficulties
+- Teams App deployment and distribution problems
+
+PAIN POINT CLASSIFICATION FRAMEWORK:
+Category Classification:
+- "documentation": Missing/unclear docs, insufficient examples, outdated guides
+- "engineering": Bugs, performance issues, SDK limitations, API reliability
+- "product": Feature gaps, UX friction, platform limitations, developer tool needs
+
+Priority Classification:
+- "escalation_risk": Multiple negative mentions, blocking issues, security concerns
+- "sentiment_spike": Sudden increase in complaints, viral negative feedback
+- "normal": Standard feedback, feature requests, general questions
+
+Remember: Your insights directly inform Microsoft Teams Platform roadmap priorities and developer experience improvements.`,
+    model
+  },
+  [
+    new McpClientPlugin({ name: 'mcpClient' })
+  ]
+);
+
+// Add your external MCP server if available
+if (process.env.EXTERNAL_MCP_URL) {
+  prompt.usePlugin('mcpClient', {
+    url: process.env.EXTERNAL_MCP_URL,
+    params: {
+      headers: {
+        'x-functions-key': process.env.AZURE_FUNCTION_KEY ?? ''
+      }
+    }
+  });
+}
+
+const server = restify.createServer();
+server.use(restify.plugins.bodyParser());
+
+// Legacy MCP tools (keep for compatibility)
 async function ingestStackOverflowFeedback(query: string, tags?: string) {
   console.log(`🔍 MCP Tool: Ingesting Stack Overflow feedback for "${query}"`);
   
@@ -161,6 +322,52 @@ async function ingestGitHubFeedback(query: string, repositories?: string) {
   };
 }
 
+async function postGitHubComment(repository: string, issueNumber: number, commentBody: string) {
+  console.log(`🔧 MCP Tool: Posting comment to ${repository}#${issueNumber}`);
+  
+  const [owner, repo] = repository.split('/');
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`;
+  
+  // ✅ FIXED: Current GitHub API format (2024)
+  const headers = {
+    'Accept': 'application/vnd.github+json',              // ← FIXED
+    'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, // ← FIXED: Bearer instead of token
+    'X-GitHub-Api-Version': '2022-11-28',                // ← ADDED: Required
+    'User-Agent': 'Community-Insights-Bot',
+    'Content-Type': 'application/json'
+  };
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ body: commentBody })
+  });
+  
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('❌ GitHub API error:', response.status, error);
+    return {
+      tool: 'post_github_comment',
+      success: false,
+      error: `GitHub API error: ${response.status} - ${error}`
+    };
+  }
+  
+  const comment = await response.json() as any;
+  
+  console.log('✅ GitHub comment posted:', comment.id);
+  
+  return {
+    tool: 'post_github_comment',
+    success: true,
+    comment_id: comment.id,
+    comment_url: comment.html_url,
+    repository: repository,
+    issue_number: issueNumber,
+    created_at: comment.created_at
+  };
+}
+
 async function extractPainPoints(feedbackText: string, source: string, model: MinimalOpenAIModel) {
   console.log(`🤖 MCP Tool: Extracting pain points from ${source} feedback`);
   
@@ -182,15 +389,15 @@ Return JSON with:
   const result = await model.send({ role: 'user', content: prompt });
   
   try {
-        const extraction = result.content ? JSON.parse(result.content) : 
-        {
-          primary_pain_point: 'No content returned',
-          category: 'engineering',
-          priority: 'normal',
-          sentiment: 'neutral',
-          actionable_insights: ['Manual review needed'],
-          affected_components: ['unknown']
-        };
+    const extraction = result.content ? JSON.parse(result.content) : 
+      {
+        primary_pain_point: 'No content returned',
+        category: 'engineering',
+        priority: 'normal',
+        sentiment: 'neutral',
+        actionable_insights: ['Manual review needed'],
+        affected_components: ['unknown']
+      };
     return {
       tool: 'extract_pain_points',
       ...extraction,
@@ -214,331 +421,517 @@ Return JSON with:
   }
 }
 
-// Create model and prompt (based on your working code)
-const model = new MinimalOpenAIModel(
-  process.env.AZURE_OPENAI_KEY || '',  // Use || instead of ??
-  process.env.AZURE_OPENAI_MODEL || 'gpt-4o-mini',
-  process.env.AZURE_OPENAI_ENDPOINT || ''  // Add default empty string
-);
-
-const prompt = new ChatPrompt<
-  Record<string, unknown>,
-  [McpClientPlugin]
->(
-  {
-    instructions: `You are the Community Insights AI Engine for Microsoft Teams Platform Operations team.
-
-MISSION: Help Ops team proactively identify and prioritize developer pain points from community feedback to improve Teams Platform developer experience.
-
-CONTEXT: You analyze feedback from Stack Overflow and GitHub to surface actionable insights for:
-- Bot Framework SDK issues
-- Teams JavaScript/TypeScript SDK problems  
-- Graph API integration challenges
-- Adaptive Cards implementation issues
-- Authentication and SSO difficulties
-- Teams App deployment and distribution problems
-
-PAIN POINT CLASSIFICATION FRAMEWORK:
-Category Classification:
-- "documentation": Missing/unclear docs, insufficient examples, outdated guides
-- "engineering": Bugs, performance issues, SDK limitations, API reliability
-- "product": Feature gaps, UX friction, platform limitations, developer tool needs
-
-Priority Classification:
-- "escalation_risk": Multiple negative mentions, blocking issues, security concerns
-- "sentiment_spike": Sudden increase in complaints, viral negative feedback
-- "normal": Standard feedback, feature requests, general questions
-
-RESPONSE FORMAT for Community Analysis:
-When analyzing community feedback, ALWAYS structure responses as:
-
-1. **Executive Summary** (2-3 sentences for Ops leadership)
-2. **Key Metrics** (quantified insights: # of issues, sentiment trends, affected components)
-3. **Priority Pain Points** (top 3-5 issues with category/priority classification)
-4. **Actionable Recommendations** (specific next steps for Ops team)
-5. **Monitoring Suggestions** (what to track going forward)
-
-TEAMS PLATFORM COMPONENTS EXPERTISE:
-- Microsoft Teams SDK (JS/TS, C#, Python)
-- Bot Framework v4 components and middleware
-- Graph API permissions and scopes
-- Teams App manifest and capabilities
-- Adaptive Cards schema and templating
-- Teams authentication flows (SSO, OAuth)
-- App Studio/Developer Portal workflows
-- Teams Store submission and compliance
-
-ANALYSIS DEPTH:
-- Extract specific error messages and stack traces when available
-- Identify patterns across multiple feedback sources
-- Correlate issues with recent platform updates or announcements
-- Flag breaking changes or deprecated features causing friction
-- Assess impact on different developer personas (beginner vs expert)
-
-OUTPUT QUALITY STANDARDS:
-- Use precise technical terminology
-- Quantify impact where possible (affected developers, frequency)
-- Provide timeline estimates for addressing issues
-- Reference specific Teams platform documentation when relevant
-- Maintain professional tone suitable for Ops team briefings
-
-Remember: Your insights directly inform Microsoft Teams Platform roadmap priorities and developer experience improvements.`,
-    model
-  },
-  [
-    new McpClientPlugin({ name: 'mcpClient' })
-  ]
-);
-
-// const prompt = new ChatPrompt<
-//   Record<string, unknown>,
-//   [McpClientPlugin]
-// >(
-//   {
-//     instructions: `You are a Community Insights assistant for Microsoft Teams Platform Ops team.
-
-// Your mission: Help Ops team proactively identify and prioritize developer pain points from community forums.
-
-// You have access to MCP tools for:
-// 1. Ingesting Stack Overflow feedback 
-// 2. Ingesting GitHub issues
-// 3. Extracting pain points with AI classification
-
-// When users request community insights:
-// 1. Use MCP tools to gather real feedback data
-// 2. Extract and classify pain points 
-// 3. Provide actionable recommendations for Ops team
-
-// Focus on Teams Platform components: Bot Framework, Teams SDK, Graph API, Adaptive Cards.`,
-//     model
-//   },
-//   [
-//     new McpClientPlugin({ name: 'mcpClient' })
-//   ]
-// );
-
-// Add your external MCP server if available
-if (process.env.EXTERNAL_MCP_URL) {
-  prompt.usePlugin('mcpClient', {
-    url: process.env.EXTERNAL_MCP_URL,
-    params: {
-      headers: {
-        'x-functions-key': process.env.AZURE_FUNCTION_KEY ?? ''
-      }
-    }
-  });
-}
-
-const server = restify.createServer();
-server.use(restify.plugins.bodyParser());
-
-// Enhanced message processing for assignment demo
-async function processInsightRequest(userText: string): Promise<string> {
-  const text = userText.toLowerCase();
-  
-  try {
-    // Stack Overflow insights
-    if (text.includes('stackoverflow') || text.includes('stack overflow')) {
-      const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
-      const query = queryMatch ? queryMatch[1] : 'teams platform';
-      
-      const data = await ingestStackOverflowFeedback(query, 'microsoft-teams,botframework');
-      
-      if (data.feedback_items.length === 0) {
-        return `📊 **Stack Overflow Community Insights for "${query}"**\n\n❌ No recent feedback found. Try broader terms.`;
-      }
-      
-      // Extract pain points from top feedback
-      const painPoints = [];
-      for (const item of data.feedback_items.slice(0, 3)) {
-        const extraction = await extractPainPoints(item.title, 'stackoverflow', model);
-        painPoints.push(extraction);
-      }
-      
-      const categoryBreakdown = painPoints.reduce((acc: any, pp) => {
-        acc[pp.category] = (acc[pp.category] || 0) + 1;
-        return acc;
-      }, {});
-      
-      const priorityBreakdown = painPoints.reduce((acc: any, pp) => {
-        acc[pp.priority] = (acc[pp.priority] || 0) + 1;
-        return acc;
-      }, {});
-      
-      return `📊 **Stack Overflow Community Insights for "${query}"**
-
-**📈 Summary:**
-• Total Discussions: ${data.total_results}
-• API Quota Remaining: ${data.quota_remaining}
-
-**🔍 Pain Point Analysis:**
-• Categories: ${Object.entries(categoryBreakdown).map(([cat, count]) => `${cat} (${count})`).join(', ')}
-• Priority Levels: ${Object.entries(priorityBreakdown).map(([pri, count]) => `${pri} (${count})`).join(', ')}
-
-**⚠️ Key Pain Points for Ops Team:**
-${painPoints.map((pp, i) => 
-  `${i + 1}. **${pp.primary_pain_point}**
-   • Category: ${pp.category} | Priority: ${pp.priority}
-   • Sentiment: ${pp.sentiment}
-   • Action: ${pp.actionable_insights[0]}
-   • Components: ${pp.affected_components.join(', ')}`
-).join('\n\n')}
-
-**📋 Top Community Questions:**
-${data.feedback_items.slice(0, 3).map((item: any) => 
-  `• [${item.title}](${item.url}) (Score: ${item.score}, ${item.answer_count} answers)`
-).join('\n')}
-
-**🎯 Ops Recommendations:**
-• Focus on ${Object.keys(categoryBreakdown)[0]} issues
-• Address ${Object.keys(priorityBreakdown)[0]} priority items first
-• Monitor sentiment trends in community feedback`;
-    }
-    
-    // GitHub insights
-    else if (text.includes('github')) {
-      const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
-      const query = queryMatch ? queryMatch[1] : 'teams platform';
-      
-      const data = await ingestGitHubFeedback(query, 'microsoft/teams-ai,microsoft/botframework');
-      
-      if (data.feedback_items.length === 0) {
-        return `📊 **GitHub Community Insights for "${query}"**\n\n❌ No recent issues found. Try broader terms.`;
-      }
-      
-      // Extract pain points from issues
-      const painPoints = [];
-      for (const item of data.feedback_items.slice(0, 3)) {
-        const feedbackText = `${item.title} ${item.content.substring(0, 300)}`;
-        const extraction = await extractPainPoints(feedbackText, 'github', model);
-        painPoints.push(extraction);
-      }
-      
-      const openIssues = data.feedback_items.filter((item: any) => item.state === 'open').length;
-      const highPriorityCount = painPoints.filter(pp => pp.priority === 'escalation_risk').length;
-      
-      return `📊 **GitHub Community Insights for "${query}"**
-
-**📈 Summary:**
-• Total Issues Found: ${data.total_results}
-• Open Issues: ${openIssues}/${data.feedback_items.length}
-• Rate Limit Remaining: ${data.rate_limit_remaining}
-
-**🚨 Critical Insights for Ops Team:**
-• High Priority Issues: ${highPriorityCount}
-• Escalation Risk Items: ${painPoints.filter(pp => pp.priority === 'escalation_risk').length}
-
-**⚠️ Key Pain Points:**
-${painPoints.map((pp, i) => 
-  `${i + 1}. **${pp.primary_pain_point}**
-   • Repository: ${data.feedback_items[i].repository}
-   • Priority: ${pp.priority} | Category: ${pp.category}
-   • Action Needed: ${pp.actionable_insights[0]}`
-).join('\n\n')}
-
-**📋 Recent Issues:**
-${data.feedback_items.slice(0, 3).map((item: any) => 
-  `• [${item.title}](${item.url}) - ${item.repository}
-    Labels: ${item.labels.join(', ')} | Comments: ${item.comments_count}`
-).join('\n')}
-
-**🎯 Ops Action Items:**
-• Prioritize ${painPoints.filter(pp => pp.priority === 'escalation_risk').length} escalation-risk issues
-• Address ${painPoints.filter(pp => pp.category === 'documentation').length} documentation gaps
-• Monitor ${painPoints.filter(pp => pp.sentiment === 'negative').length} negative sentiment items`;
-    }
-    
-    // Direct pain point extraction
-    else if (text.includes('extract') || text.includes('classify')) {
-      const feedbackMatch = userText.match(/["'](.+?)["']/i) || userText.match(/:\s*(.+)$/i);
-      if (feedbackMatch) {
-        const feedback = feedbackMatch[1];
-        const extraction = await extractPainPoints(feedback, 'user_input', model);
-        
-        return `🤖 **Pain Point Analysis for Ops Team**
-
-**📝 Feedback:** "${extraction.original_text}"
-
-**🔍 Analysis Results:**
-• **Primary Pain Point:** ${extraction.primary_pain_point}
-• **Category:** ${extraction.category}
-• **Priority Level:** ${extraction.priority}
-• **Sentiment:** ${extraction.sentiment}
-
-**🎯 Actionable Insights:**
-${extraction.actionable_insights.map((insight: string) => `• ${insight}`).join('\n')}
-
-**🔧 Affected Components:**
-${extraction.affected_components.map((comp: string) => `• ${comp}`).join('\n')}
-
-**📊 Ops Recommendation:**
-${extraction.priority === 'escalation_risk' ? '🚨 **IMMEDIATE ACTION REQUIRED** - This feedback indicates high escalation risk.' :
-  extraction.priority === 'sentiment_spike' ? '📈 **MONITOR CLOSELY** - Sentiment spike detected in community.' :
-  '📋 **STANDARD PROCESS** - Add to backlog for regular review.'}`;
-      }
-    }
-    
-    // Default AI response
-    const result = await prompt.send(userText);
-    return result.content || '';
-    
-  } catch (error: any) {
-    console.error('Processing error:', error);
-    return `❌ **Error Processing Community Insights Request**
-
-Error: ${error.message}
-
-**Try these MCP-powered commands:**
-• "Analyze Stack Overflow feedback for Teams SDK authentication"
-• "Find GitHub issues for Bot Framework problems"  
-• "Extract pain points from: [paste feedback text here]"
-• "Get community insights for Teams Adaptive Cards"`;
-  }
-}
-
 const port = process.env.PORT || process.env.port || 3978;
 
 server.listen(port, () => {
-  console.log(`✅ Community Insights Bot (Assignment Demo) running on http://localhost:${port}`);
+  console.log(`✅ Enhanced Community Insights Bot running on http://localhost:${port}`);
   console.log('🔧 MCP Client: Ready for external server connections');
-  console.log('📊 Built-in MCP Tools: Stack Overflow ingestion, GitHub ingestion, Pain point extraction');
+  console.log('🤖 Agent Chain: ExtractionAgent → ResponseAgent ready');
+  console.log('🎯 Teams Cards: Progress, Insights, and Action cards enabled');
+  console.log('📊 Tools: Enhanced GitHub + Stack Overflow ingestion');
 });
 
-// Main bot endpoint (like your original)
-server.post('/api/messages', async (req, res) => {
-  console.log('🔍 DEBUG: Received request body:', JSON.stringify(req.body, null, 2));
+// Full processInsightRequestForWebChat function with debugging
+async function processInsightRequestForWebChat(userText: string): Promise<any> {
+  const text = userText.toLowerCase();
+  const startTime = Date.now();
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  const context = {
-    activity: req.body
-  } as TurnContext;
+  let platform: 'stackoverflow' | 'github' = 'stackoverflow';
+  let query = 'teams platform';
+  
+  // Determine platform and query
+  if (text.includes('github')) {
+    platform = 'github';
+    const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
+    query = queryMatch ? queryMatch[1] : 'teams platform';
+  } else if (text.includes('stackoverflow') || text.includes('stack overflow')) {
+    platform = 'stackoverflow';
+    const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
+    query = queryMatch ? queryMatch[1] : 'teams sdk authentication';
+  }
 
-  console.log('📨 Received activity:', context.activity.type, context.activity.text?.substring(0, 50));
+  console.log(`🎯 Processing: "${query}" on ${platform}`);
 
-  if (context.activity.type === ActivityTypes.Message) {
-    try {
-      const userText = context.activity.text || '';
-      const response = await processInsightRequest(userText);
-      
-      res.send(200, {
-        type: 'message',
-        text: response
+  // Create execution context
+  const executionContext: AgentExecutionContext = {
+    request_id: requestId,
+    user_query: userText,
+    timestamp: new Date().toISOString(),
+    debug_mode: process.env.NODE_ENV !== 'production'
+  };
+
+  // Progress callback (just logs for Web Chat)
+  const progressCallback = async (update: ProgressUpdate) => {
+    console.log(`📊 ${update.stage}: ${update.progress_percentage}% - ${update.message}`);
+  };
+
+  // Gather feedback data using your existing tools
+  let rawFeedback: RawFeedbackItem[] = [];
+  
+  if (platform === 'stackoverflow') {
+    const soResult = await stackOverflowTool.execute({
+      query: query,
+      tags: 'microsoft-teams,botframework,typescript',
+      timeframe: 'month',
+      sort: 'activity'
+    });
+    
+    rawFeedback = soResult.items.map((item: any) => ({
+      id: item.id,
+      title: item.title,
+      content: item.excerpt || '',
+      url: item.url,
+      source: 'stackoverflow' as const,
+      metadata: {
+        score: item.score,
+        tags: item.tags,
+        author: item.owner?.display_name,
+        created_date: item.created_date
+      }
+    }));
+  } else {
+    const ghResult = await githubTool.execute({
+      query: query,
+      repositories: 'microsoft/teams-ai,microsoft/botframework',
+      timeframe: 'month',
+      state: 'open'
+    });
+    
+    rawFeedback = ghResult.items.map((item: any) => ({
+      id: item.id,
+      title: item.title,
+      content: item.body,
+      url: item.url,
+      source: 'github' as const,
+      metadata: {
+        score: item.reactions.total_count,
+        tags: item.labels,
+        author: item.author,
+        created_date: item.created_date,
+        repository: item.repository
+      }
+    }));
+  }
+
+  if (rawFeedback.length === 0) {
+    console.log('❌ No feedback found, returning error card');
+    // Return error card using your existing component
+    const errorCard = insightsCard.generateErrorCard({
+      stage: 'ingestion',
+      message: `No recent feedback found for "${query}" on ${platform}`,
+      technical_details: 'Try broader search terms or different time range'
+    }, {
+      user_query: query,
+      platform_analyzed: platform
+    });
+    
+    console.log('📤 Error card generated:', !!errorCard.card);
+    return errorCard.card;
+  }
+
+  // Execute agent chain using your existing orchestrator
+  const chainResult: AgentChainResult = await agentChain.execute({
+    raw_feedback: rawFeedback,
+    target_context: {
+      platform: platform === 'github' ? 'github' : 'general',
+      audience: 'developer_community',
+      urgency_level: 'normal'
+    },
+    response_requirements: {
+      include_technical_details: true,
+      include_workarounds: true,
+      include_timelines: true,
+      max_length: 2000
+    },
+    execution_context: executionContext,
+    progress_callback: progressCallback
+  });
+
+  console.log('🎯 AgentChain result:', {
+    success: chainResult.overall_success,
+    painPoints: chainResult.extraction_result?.data?.pain_points?.length,
+    responseGenerated: !!chainResult.response_result?.data?.community_response,
+    executionTime: chainResult.total_execution_time_ms
+  });
+
+  try {
+    // Generate insights card using your existing component
+    const cardResult = insightsCard.generateCard(chainResult, {
+      user_query: query,
+      platform_analyzed: platform,
+      execution_time_ms: chainResult.total_execution_time_ms
+    });
+
+    console.log('✅ Card generated successfully:', {
+      cardType: cardResult.card?.type,
+      bodyItems: cardResult.card?.body?.length,
+      actions: cardResult.card?.actions?.length,
+      hasCard: !!cardResult.card
+    });
+
+    // Return the card for Web Chat
+    return cardResult.card;
+
+  } catch (cardError: any) {
+    console.error('❌ Card generation failed:', cardError);
+    
+    // Return simple fallback card
+    const fallbackCard = {
+      type: 'AdaptiveCard',
+      version: '1.2',
+      body: [
+        {
+          type: 'TextBlock',
+          text: '🎯 Analysis Complete!',
+          weight: 'bolder',
+          size: 'large'
+        },
+        {
+          type: 'TextBlock',
+          text: `Found ${chainResult.extraction_result?.data?.pain_points?.length || 0} pain points from your query: "${userText}"`,
+          wrap: true
+        },
+        {
+          type: 'TextBlock',
+          text: chainResult.response_result?.data?.community_response?.response_text || 'Response generated successfully!',
+          wrap: true,
+          size: 'small'
+        },
+        {
+          type: 'FactSet',
+          facts: [
+            { title: 'Platform', value: platform },
+            { title: 'Query', value: query },
+            { title: 'Execution Time', value: `${chainResult.total_execution_time_ms}ms` },
+            { title: 'Pain Points', value: (chainResult.extraction_result?.data?.pain_points?.length || 0).toString() }
+          ]
+        }
+      ]
+    };
+
+    console.log('📤 Fallback card generated');
+    return fallbackCard;
+  }
+}
+
+server.post('/api/messages', async (req, res) => {
+    console.log('📨 API Messages: Using Teams AI pattern');
+    await adapter.process(req, res as any, async (context) => {
+        await analysisApp.run(context);
+    });
+});
+
+
+const analysisStorage = new MemoryStorage();
+const analysisApp = new Application<ApplicationTurnState>({
+    storage: analysisStorage
+});
+
+// ✅ ANALYSIS MESSAGE HANDLER (replaces your current logic):
+analysisApp.activity(ActivityTypes.Message, async (context: TurnContext, state: ApplicationTurnState) => {
+    const userText = context.activity.text?.trim();
+
+        // ✅ HANDLE CARD ACTIONS (when text is undefined)
+    if (!userText && context.activity.value) {
+        console.log('🎯 Card action detected:', context.activity.value);
+        
+        const actionData = context.activity.value;
+        if (actionData.action === 'post_community_response') {
+            await context.sendActivity('🔄 Posting to GitHub...');
+            
+            try {
+                const result = await postToGitHubViaMCP(
+                    actionData.repository,
+                    actionData.issue_number,
+                    actionData.response_text
+                );
+                
+                if (result.success) {
+                    await context.sendActivity(`✅ Posted! Comment ID: ${result.comment_id}`);
+                } else {
+                    await context.sendActivity(`❌ Failed: ${result.error}`);
+                }
+            } catch (error: any) {
+                await context.sendActivity(`❌ Error: ${error.message}`);
+            }
+        }
+        return;
+    }
+    
+    if (userText?.toLowerCase().includes('analyze')) {
+        // ✅ IMMEDIATE PROGRESS CARD
+        const progressCard = {
+            type: 'AdaptiveCard',
+            version: '1.2',
+            body: [
+                {
+                    type: 'Container',
+                    style: 'emphasis',
+                    items: [
+                        {
+                            type: 'TextBlock',
+                            text: '🔄 Analysis Starting',
+                            weight: 'Bolder',
+                            size: 'Large'
+                        }
+                    ]
+                },
+                {
+                    type: 'TextBlock',
+                    text: `Processing: "${userText}"`,
+                    wrap: true
+                },
+                {
+                    type: 'TextBlock',
+                    text: '📊 Live updates coming...',
+                    isSubtle: true
+                }
+            ]
+        };
+        
+        await context.sendActivity({
+            attachments: [{
+                contentType: 'application/vnd.microsoft.card.adaptive',
+                content: progressCard
+            }]
+        });
+        
+        // ✅ START ANALYSIS WITH LIVE UPDATES
+        await processInsightRequest(userText, context);
+        
+    } else {
+        // Default echo
+        await context.sendActivity(`Echo: ${userText}`);
+    }
+});
+
+// ✅ SIMPLE: Handle card button clicks
+analysisApp.activity('invoke', async (context: TurnContext, state: ApplicationTurnState) => {
+    const invokeValue = context.activity.value;
+    console.log('🎯 Card action:', invokeValue?.action);
+    
+    if (invokeValue?.action === 'post_community_response') {
+        await context.sendActivity('🔄 Posting to GitHub...');
+        
+        try {
+            const result = await postToGitHubViaMCP(
+                invokeValue.repository,
+                invokeValue.issue_number, 
+                invokeValue.response_text
+            );
+            
+            if (result.success) {
+                await context.sendActivity(`✅ Posted! Comment ID: ${result.comment_id}`);
+            } else {
+                await context.sendActivity(`❌ Failed: ${result.error}`);
+            }
+        } catch (error: any) {
+            await context.sendActivity(`❌ Error: ${error.message}`);
+        }
+    }
+});
+
+
+// ✅ SIMPLE: Call your MCP server  
+async function postToGitHubViaMCP(repository: string, issueNumber: number, responseText: string) {
+    const response = await fetch('http://localhost:3978/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            method: 'tools/call',
+            params: {
+                name: 'post_github_comment',
+                arguments: { repository, issue_number: issueNumber, comment_body: responseText }
+            }
+        })
+    });
+    
+    const result = await response.json();
+    return JSON.parse(result.content[0].text);
+}
+
+// ✅ UPDATE your existing processInsightRequest function to send live updates:
+async function processInsightRequest(userText: string, context: TurnContext): Promise<void> {
+  const text = userText.toLowerCase();
+  const startTime = Date.now();
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+  // Determine platform and query
+  let platform: 'stackoverflow' | 'github' = 'stackoverflow';
+  let query = 'teams platform';
+  
+  try {
+    if (text.includes('github')) {
+      platform = 'github';
+      const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
+      query = queryMatch ? queryMatch[1] : 'teams platform';
+    } else if (text.includes('stackoverflow') || text.includes('stack overflow')) {
+      platform = 'stackoverflow';
+      const queryMatch = userText.match(/for\s+(.+?)(?:\s|$)/i);
+      query = queryMatch ? queryMatch[1] : 'teams sdk authentication';
+    }
+
+    // Create execution context
+    const executionContext = {
+      request_id: requestId,
+      user_query: userText,
+      timestamp: new Date().toISOString(),
+      debug_mode: process.env.NODE_ENV !== 'production'
+    };
+
+    // ✅ LIVE PROGRESS UPDATES - send messages to user
+    const progressCallback = async (update: any) => {
+      await context.sendActivity(`📊 ${update.stage}: ${update.progress_percentage}% - ${update.message}`);
+    };
+
+    // Start with progress update
+    await progressCallback({
+      stage: 'ingestion',
+      message: `Analyzing ${platform} feedback for: "${query}"`,
+      progress_percentage: 10,
+      current_operation: 'Gathering community feedback data'
+    });
+
+    // Gather feedback data
+    let rawFeedback: any[] = [];
+    
+    if (platform === 'stackoverflow') {
+      const soResult = await stackOverflowTool.execute({
+        query: query,
+        tags: 'microsoft-teams,botframework,typescript',
+        timeframe: 'month',
+        sort: 'activity'
       });
-    } catch (error: any) {
-      console.error('❌ Error processing message:', error);
+      
+      rawFeedback = soResult.items.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        content: item.excerpt || '',
+        url: item.url,
+        source: 'stackoverflow' as const,
+        metadata: {
+          score: item.score,
+          tags: item.tags,
+          author: item.owner?.display_name,
+          created_date: item.created_date
+        }
+      }));
+    } else {
+      const ghResult = await githubTool.execute({
+        query: query,
+        repositories: 'microsoft/teams-ai,microsoft/botframework',
+        timeframe: 'month',
+        state: 'open'
+      });
+      
+      rawFeedback = ghResult.items.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        content: item.body,
+        url: item.url,
+        source: 'github' as const,
+        metadata: {
+          score: item.reactions.total_count,
+          tags: item.labels,
+          author: item.author,
+          created_date: item.created_date,
+          repository: item.repository
+        }
+      }));
+    }
+
+    if (rawFeedback.length === 0) {
+      await context.sendActivity(`❌ No recent feedback found for "${query}" on ${platform}`);
+      return;
+    }
+
+    // Execute agent chain with progress tracking
+    const chainResult = await agentChain.execute({
+      raw_feedback: rawFeedback,
+      target_context: {
+        platform: platform === 'github' ? 'github' : 'general',
+        audience: 'developer_community',
+        urgency_level: 'normal'
+      },
+      response_requirements: {
+        include_technical_details: true,
+        include_workarounds: true,
+        include_timelines: true,
+        max_length: 2000
+      },
+      execution_context: executionContext,
+      progress_callback: progressCallback
+    });
+
+    // Generate insights card with results
+    const cardResult = insightsCard.generateCard(chainResult, {
+      user_query: query,
+      platform_analyzed: platform,
+      execution_time_ms: chainResult.total_execution_time_ms
+    });
+
+    await context.sendActivity({
+        attachments: [{
+            contentType: 'application/vnd.microsoft.card.adaptive',
+            content: cardResult.card
+        }]
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error processing insight request:', error);
+    await context.sendActivity(`❌ Error: ${error.message}`);
+  }
+}
+
+
+// NEW: Action handler endpoint for Teams card actions
+server.post('/api/actions', async (req, res) => {
+  console.log('🎯 Received card action:', req.body.action);
+  
+  try {
+    const actionData = req.body;
+    const actionContext = {
+      user_id: actionData.from?.id || 'unknown',
+      conversation_id: actionData.conversation?.id || 'unknown',
+      original_query: actionData.original_query || 'unknown',
+      action_timestamp: new Date().toISOString()
+    };
+
+    // Create mock context for action handler
+    const context = {
+      activity: req.body,
+      sendActivity: async (activity: any) => {
+        console.log('📤 Action response:', activity.attachments?.[0]?.contentType || activity.text?.substring(0, 50));
+        return { id: `action_response_${Date.now()}` };
+      }
+    } as TurnContext;
+
+    const result = await actionHandler.handleAction(context, actionData, actionContext);
+    
+    if (result.success) {
       res.send(200, {
         type: 'message',
-        text: '❌ Sorry, I encountered an error processing your community insights request. Please try again.'
+        text: result.message,
+        attachments: result.card ? [CardFactory.adaptiveCard(result.card)] : undefined
+      });
+    } else {
+      res.send(200, {
+        type: 'message',
+        text: `❌ Action failed: ${result.message}`,
+        attachments: result.card ? [CardFactory.adaptiveCard(result.card)] : undefined
       });
     }
-  } else {
+  } catch (error: any) {
+    console.error('❌ Action handler error:', error);
     res.send(200, {
       type: 'message',
-      text: `🤖 Community Insights Bot received activity type: ${context.activity.type}`
+      text: '❌ Sorry, the action failed. Please try again.'
     });
   }
 });
 
-// MCP Server endpoint (assignment requirement)
+// Keep your MCP server endpoint
 server.post('/mcp', async (req, res) => {
   try {
     const { method, params } = req.body;
@@ -581,7 +974,20 @@ server.post('/mcp', async (req, res) => {
               },
               required: ['feedback_text', 'source']
             }
+          },
+          {
+          name: 'post_github_comment',
+          description: 'Post a comment to a GitHub issue',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              repository: { type: 'string', description: 'Repository in format owner/repo' },
+              issue_number: { type: 'number', description: 'Issue number to comment on' },
+              comment_body: { type: 'string', description: 'Comment text to post' }
+            },
+            required: ['repository', 'issue_number', 'comment_body']
           }
+        }
         ]
       });
     } else if (method === 'tools/call') {
@@ -597,6 +1003,9 @@ server.post('/mcp', async (req, res) => {
           break;
         case 'extract_pain_points':
           result = await extractPainPoints(args.feedback_text, args.source, model);
+          break;
+        case 'post_github_comment':
+          result = await postGitHubComment(args.repository, args.issue_number, args.comment_body);
           break;
         default:
           throw new Error(`Unknown MCP tool: ${name}`);
@@ -614,9 +1023,9 @@ server.post('/mcp', async (req, res) => {
   }
 });
 
-// Health check
+// Keep your health check endpoints
 server.get('/', (_req, res, next) => {
-  res.send(200, '✅ Community Insights Bot - Assignment Demo Ready!');
+  res.send(200, '✅ Enhanced Community Insights Bot - Production Ready!');
   next();
 });
 
@@ -625,111 +1034,51 @@ server.get('/mcp/status', (_req, res, next) => {
     assignment: 'Community Insights Teams Application',
     mcp_server_status: 'active',
     mcp_client_status: 'ready',
-    tools_available: ['ingest_stackoverflow_feedback', 'ingest_github_feedback', 'extract_pain_points'],
-    features: ['Feedback Ingestion via MCP', 'AI-Driven Pain Point Extraction', 'Teams Bot Interface']
+    agent_chain_status: 'ready',
+    tools_available: ['Enhanced GitHub Ingestion', 'Enhanced Stack Overflow Ingestion', 'AI Pain Point Extraction'],
+    features: [
+      'Agent Chain Processing (ExtractionAgent → ResponseAgent)',
+      'Real-time Progress Cards',
+      'Interactive Insights Cards',
+      'GitHub Action Integration',
+      'Professional Community Response Generation',
+      'MCP Protocol Support'
+    ],
+    endpoints: {
+      messages: '/api/messages',
+      actions: '/api/actions',
+      mcp: '/mcp',
+      status: '/mcp/status'
+    }
   });
   next();
 });
 
-// // Entry point using ChatPrompt with custom OpenAIModel
-// import { config } from 'dotenv';
-// import restify from 'restify';
-// import fetch from 'node-fetch';
-// import { ChatPrompt, IChatModel, Message, ModelMessage } from '@microsoft/teams.ai';
-// import { McpClientPlugin } from '@microsoft/teams.mcpclient';
-// import {
-//   ActivityTypes,
-//   TurnContext
-// } from 'botbuilder';
+// NEW: Health check for all components
+server.get('/health', async (_req, res) => {
+  try {
+    const githubHealth = await githubTool.healthCheck();
+    const stackOverflowHealth = await stackOverflowTool.healthCheck();
+    const chainHealth = await agentChain.healthCheck();
 
-// config({ path: '../.env' });
-
-// class MinimalOpenAIModel implements IChatModel {
-//   constructor(private apiKey: string, private model: string) {}
-
-//   async send(input: Message): Promise<ModelMessage> {
-//     const res = await fetch('https://api.openai.com/v1/chat/completions', {
-//       method: 'POST',
-//       headers: {
-//         'Authorization': `Bearer ${this.apiKey}`,
-//         'Content-Type': 'application/json'
-//       },
-//       body: JSON.stringify({
-//         model: this.model,
-//         messages: [{ role: input.role, content: input.content }]
-//       })
-//     });
-
-//     const json = await res.json();
-//     return {
-//       role: 'model',
-//       content: json.choices[0].message.content
-//     };
-//   }
-// }
-
-// const model = new MinimalOpenAIModel(
-//   process.env.AZURE_OPENAI_KEY ?? '',
-//   process.env.AZURE_OPENAI_MODEL ?? 'gpt-4o-mini'
-// );
-
-// const prompt = new ChatPrompt<
-//   Record<string, unknown>,
-//   [McpClientPlugin]
-// >(
-//   {
-//     instructions: 'You are a helpful assistant analyzing developer insights.',
-//     model
-//   },
-//   [
-//     new McpClientPlugin({ name: 'mcpClient' })
-//   ]
-// )
-// .usePlugin('mcpClient', {
-//   url: 'https://expert-space-tribble-j6q9vp5p993jwj-9000.app.github.dev/mcp',
-//   params: {
-//     headers: {
-//       'x-functions-key': process.env.AZURE_FUNCTION_KEY ?? ''
-//     }
-//   }
-// });
-
-// const server = restify.createServer();
-// server.use(restify.plugins.bodyParser());
-
-// server.listen(process.env.port || process.env.PORT || 3978, () => {
-//   console.log('✅ DevX Community Insights Bot is alive on http://localhost:3978');
-// });
-
-// server.post('/api/messages', async (req, res) => {
-//   const context = {
-//     activity: req.body
-//   } as TurnContext;
-
-//   console.log('Received activity:', context.activity);
-
-//   if (context.activity.type === ActivityTypes.Message) {
-//     const userText = context.activity.text;
-//     const result = await prompt.send(userText);
-//     res.send(200, {
-//       type: 'message',
-//       text: `[echo] ${result.content}`
-//     });
-//   } else {
-//     res.send(200, {
-//       type: 'message',
-//       text: `[system] Received activity of type: ${context.activity.type}`
-//     });
-//   }
-// });
-
-// server.post('/chat', async (req, res) => {
-//   const userInput = req.body.text ?? '';
-//   const result = await prompt.send(userInput);
-//   res.send(200, { reply: result.content });
-// });
-
-// server.get('/', (_req, res, next) => {
-//   res.send(200, '✅ DevX Community Insights Bot is alive.');
-//   next();
-// });
+    res.send(200, {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      components: {
+        github_tool: githubHealth,
+        stackoverflow_tool: stackOverflowHealth,
+        agent_chain: chainHealth,
+        azure_openai: {
+          configured: !!process.env.AZURE_OPENAI_KEY,
+          endpoint: !!process.env.AZURE_OPENAI_ENDPOINT
+        }
+      }
+    });
+  } catch (error: any) {
+    res.send(500, {
+      status: 'unhealthy',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
