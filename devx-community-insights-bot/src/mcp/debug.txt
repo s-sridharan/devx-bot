@@ -1,0 +1,122 @@
+// debug.ts - Run this to diagnose the issue
+
+import { createRequire } from 'module';
+import * as http from 'http';
+
+console.log('🔍 TEAMS MCP DEBUG DIAGNOSTICS');
+console.log('================================');
+
+// Check Node.js version
+console.log('📋 Environment Info:');
+console.log('Node.js version:', process.version);
+console.log('Platform:', process.platform);
+console.log('Architecture:', process.arch);
+console.log('Working directory:', process.cwd());
+console.log();
+
+// Check module availability
+console.log('📦 Module Availability:');
+console.log('http module:', !!http);
+console.log('http.get:', typeof http.get);
+console.log('http.createServer:', typeof http.createServer);
+
+try {
+  const require = createRequire(import.meta.url);
+  console.log('require function:', typeof require);
+  
+  // Try requiring http through require
+  const httpRequired = require('http');
+  console.log('http via require:', !!httpRequired);
+  console.log('http.get via require:', typeof httpRequired.get);
+} catch (e) {
+  console.log('require failed:', e.message);
+}
+console.log();
+
+// Check global setup
+console.log('🌐 Global Setup:');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = globalThis as any;
+console.log('globalThis.http:', typeof g.http);
+console.log('globalThis.http.get:', typeof g.http?.get);
+console.log('globalThis.console:', typeof g.console);
+console.log('globalThis.console.info:', typeof g.console?.info);
+console.log('globalThis.process:', typeof g.process);
+console.log();
+
+// Set up globals like our server does
+console.log('🔧 Setting up globals...');
+g.http = http;
+g.console = console;
+g.process = process;
+
+console.log('After setup:');
+console.log('globalThis.http.get:', typeof g.http?.get);
+console.log();
+
+// Check package versions
+console.log('📚 Package Information:');
+try {
+  const require = createRequire(import.meta.url);
+  const pkg = require('../package.json');
+  console.log('Package name:', pkg.name);
+  console.log('Package version:', pkg.version);
+  
+  const teamsMcpPkg = require('@microsoft/teams.mcp/package.json');
+  console.log('@microsoft/teams.mcp version:', teamsMcpPkg.version);
+  
+  if (pkg.dependencies['@microsoft/teams-ai']) {
+    console.log('@microsoft/teams-ai version:', pkg.dependencies['@microsoft/teams-ai']);
+  }
+} catch (e) {
+  console.log('Could not read package info:', e.message);
+}
+console.log();
+
+// Test basic HTTP functionality
+console.log('🌐 Testing HTTP functionality:');
+try {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Test server works');
+  });
+  
+  server.listen(0, () => {
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 'unknown';
+    console.log('✅ HTTP server test successful on port:', port);
+    server.close();
+  });
+} catch (e) {
+  console.log('❌ HTTP server test failed:', e.message);
+}
+
+// Now try to import and create the MCP plugin
+console.log('🧪 Testing MCP Plugin Import:');
+try {
+  console.log('Importing @microsoft/teams.mcp...');
+  const { McpPlugin } = await import('@microsoft/teams.mcp');
+  console.log('✅ Import successful, McpPlugin type:', typeof McpPlugin);
+  
+  console.log('Creating McpPlugin instance...');
+  const testPlugin = new McpPlugin({
+    name: 'test',
+    description: 'Test plugin'
+  });
+  console.log('✅ McpPlugin instance created successfully');
+  
+  console.log('Testing tool addition...');
+  testPlugin.tool(
+    'test_tool',
+    'Test tool',
+    {},
+    {},
+    async () => ({ content: [{ type: 'text', text: 'test' }] })
+  );
+  console.log('✅ Tool added successfully');
+  
+} catch (e) {
+  console.log('❌ MCP Plugin test failed:', e);
+}
+
+console.log('\n🏁 Debug complete. If MCP Plugin test failed, check the error details above.');

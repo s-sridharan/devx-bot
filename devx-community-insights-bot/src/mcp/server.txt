@@ -1,0 +1,520 @@
+// src/mcp/server.ts
+import { McpPlugin } from '@microsoft/teams.mcp';
+import { z } from 'zod';
+import * as http from 'http';
+
+// Inject HTTP for environments like Codespaces where `globalThis.http` may be undefined
+if (!(globalThis as any).http) {
+  (globalThis as any).http = http;
+}
+
+// Create and export plugin
+export const mcpServerPlugin = new McpPlugin({
+  name: 'mcpServer',
+  description: 'Provides developer insights',
+  inspector: 'http://localhost:5173?proxyPort=9000',
+}).tool(
+  'echo',
+  'Echoes back the text you send',
+  { input: z.string().describe('text to echo') },
+  { title: 'Echo', idempotentHint: true },
+  async ({ input }) => ({
+    content: [{ type: 'text', text: `You said: "${input}"` }],
+  })
+);
+
+// Start the server on port 9000
+mcpServerPlugin.onInit();
+mcpServerPlugin.onStart({ port: 9000 });
+
+
+
+// // mcp/server.ts
+
+// // CRITICAL: Set up ALL required globals BEFORE any imports
+// import { createRequire } from 'module';
+// import * as http from 'http';
+// import * as https from 'https';
+// import * as url from 'url';
+// import * as fs from 'fs';
+// import * as path from 'path';
+// import * as os from 'os';
+// import * as util from 'util';
+
+// // Create require function for ESM
+// const require = createRequire(import.meta.url);
+
+// // Set up comprehensive global environment that Teams MCP expects
+// const setupGlobals = () => {
+//   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+//   const g = globalThis as any;
+  
+//   // Core Node.js modules
+//   g.http = http;
+//   g.https = https;
+//   g.url = url;
+//   g.fs = fs;
+//   g.path = path;
+//   g.os = os;
+//   g.util = util;
+//   g.require = require;
+  
+//   // Console methods that might be missing
+//   if (!g.console) g.console = console;
+//   if (!g.console.info) g.console.info = console.log;
+//   if (!g.console.warn) g.console.warn = console.log;
+//   if (!g.console.error) g.console.error = console.log;
+//   if (!g.console.debug) g.console.debug = console.log;
+  
+//   // Process object
+//   if (!g.process) g.process = process;
+  
+//   // Buffer
+//   if (!g.Buffer) g.Buffer = Buffer;
+  
+//   // Also set on global for Node.js compatibility
+//   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+//   const globalNode = global as any;
+//   Object.keys(g).forEach(key => {
+//     if (!(globalNode.http)) {
+//       globalNode.http = http;
+//     }
+//   });
+// };
+
+// // Set up globals immediately
+// setupGlobals();
+
+// // Verify setup
+// console.log('🔧 Global setup verification:');
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// const g = globalThis as any;
+// console.log('✅ http.get:', typeof g.http?.get);
+// console.log('✅ https.get:', typeof g.https?.get);
+// console.log('✅ console.info:', typeof g.console?.info);
+// console.log('✅ process.env:', typeof g.process?.env);
+
+// // Set environment variables that might be expected
+// process.env.NODE_ENV = process.env.NODE_ENV || 'development';
+// process.env.PORT = '9000';
+
+// // NOW import the Teams MCP plugin
+// import { McpPlugin } from '@microsoft/teams.mcp';
+// import { z } from 'zod';
+
+// // Create plugin with minimal config first
+// let mcpServerPlugin: McpPlugin;
+
+// try {
+//   mcpServerPlugin = new McpPlugin({
+//     name: 'devx-community-insights',
+//     description: 'Provides developer community insights like GitHub issues and StackOverflow discussions'
+//     // Start without inspector to avoid SSE issues
+//   });
+  
+//   console.log('✅ McpPlugin created successfully');
+// } catch (error) {
+//   console.error('❌ Failed to create McpPlugin:', error);
+//   process.exit(1);
+// }
+
+// // Add tools
+// mcpServerPlugin.tool(
+//   'echo',
+//   'Echoes back whatever input is given',
+//   {
+//     input: z.string().describe('The text to echo back')
+//   },
+//   {
+//     title: "Echo Tool",
+//     idempotentHint: true
+//   },
+//   async ({ input }) => {
+//     console.log('🔧 Echo tool called with:', input);
+//     return {
+//       content: [{ 
+//         type: 'text', 
+//         text: `Echo response: "${input}"` 
+//       }]
+//     };
+//   }
+// );
+
+// mcpServerPlugin.tool(
+//   'get_github_issues',
+//   'Get GitHub issues for a repository',
+//   {
+//     repository: z.string().describe('Repository in format owner/repo'),
+//     state: z.enum(['open', 'closed', 'all']).optional().default('open'),
+//     limit: z.number().optional().default(10).describe('Number of issues to return')
+//   },
+//   {
+//     title: "GitHub Issues",
+//     idempotentHint: false
+//   },
+//   async ({ repository, state = 'open', limit = 10 }) => {
+//     console.log('🔧 GitHub issues tool called:', { repository, state, limit });
+    
+//     // Mock data for now - replace with actual GitHub API call
+//     const mockIssues = Array.from({ length: Math.min(limit, 3) }, (_, i) => ({
+//       number: i + 1,
+//       title: `Sample Issue ${i + 1}`,
+//       state: state,
+//       created_at: new Date().toISOString(),
+//       html_url: `https://github.com/${repository}/issues/${i + 1}`
+//     }));
+
+//     return {
+//       content: [{
+//         type: 'text',
+//         text: `Found ${mockIssues.length} ${state} issues in ${repository}:\n\n${mockIssues
+//           .map(issue => `#${issue.number}: ${issue.title}\n  ${issue.html_url}`)
+//           .join('\n\n')}`
+//       }]
+//     };
+//   }
+// );
+
+// console.log('✅ Tools added successfully');
+
+// // Start server with comprehensive error handling
+// async function startMcpServer() {
+//   const port = parseInt(process.env.PORT || '9000');
+  
+//   console.log('🚀 Starting MCP Server...');
+  
+//   try {
+//     // Method 1: Try onStart first (this seems to work better)
+//     console.log('📡 Attempting onStart...');
+//     const startResult = mcpServerPlugin.onStart({ port });
+    
+//     // // Handle both sync and async responses
+//     // if (startResult && typeof startResult.then === 'function') {
+//     //   await startResult;
+//     // }
+    
+//     console.log(`✅ MCP Server started successfully on port ${port}`);
+//     console.log(`🔗 MCP endpoint should be available at http://localhost:${port}/mcp`);
+    
+//     // Method 2: Try onInit after successful start
+//     try {
+//       console.log('🔄 Attempting onInit...');
+//       const initResult = mcpServerPlugin.onInit();
+      
+//       if (initResult && typeof initResult.then === 'function') {
+//         await initResult;
+//       }
+      
+//       console.log('✅ MCP Server initialized successfully');
+//     } catch (initError) {
+//       console.warn('⚠️ onInit failed but server is running:');
+//       console.log('✅ Server should still be functional for MCP requests');
+//     }
+    
+//   } catch (startError) {
+//     console.error('❌ onStart failed:', startError);
+    
+//     // Fallback: Try different port
+//     const fallbackPort = port + 1;
+//     console.log(`🔄 Trying fallback port ${fallbackPort}...`);
+    
+//     try {
+//       const fallbackResult = mcpServerPlugin.onStart({ port: fallbackPort });
+//       console.log(`✅ Fallback server started on port ${fallbackPort}`);
+//     } catch (fallbackError) {
+//       console.error('❌ Fallback also failed:', fallbackError);
+      
+//       // Last resort: log detailed error info
+//       console.error('🔍 Detailed error information:');
+      
+//       process.exit(1);
+//     }
+//   }
+// }
+
+// // Export the plugin for use in other parts of your application
+// export { mcpServerPlugin };
+
+// // Start the server
+// startMcpServer().catch((error) => {
+//   console.error('💥 Unhandled error starting server:', error);
+//   process.exit(1);
+// });
+
+
+
+// mcp/server.ts
+
+// // First, ensure we're in the right environment for Teams AI v2
+// import { createServer } from 'http';
+// import { readFileSync } from 'fs';
+
+// // Set up the environment that Teams MCP plugin expects
+// const server = createServer();
+
+// // Make Node.js modules available globally for the Teams MCP plugin
+// import * as http from 'http';
+// import * as https from 'https';
+// import * as url from 'url';
+// import * as fs from 'fs';
+// import * as path from 'path';
+
+// // Ensure all required modules are globally available
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// const globalThis_any = globalThis as any;
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// const global_any = global as any;
+
+// // Set up globals for both browser-style and Node-style access
+// globalThis_any.http = http;
+// globalThis_any.https = https;
+// globalThis_any.url = url;
+// globalThis_any.fs = fs;
+// globalThis_any.path = path;
+
+// global_any.http = http;
+// global_any.https = https;
+// global_any.url = url;
+// global_any.fs = fs;
+// global_any.path = path;
+
+// // Also make require available if needed
+// try {
+//   globalThis_any.require = require;
+//   global_any.require = require;
+// } catch (e) {
+//   // ESM environment, skip require
+// }
+
+// // Create a mock console.info if it doesn't exist (the error mentions reading 'info')
+// if (!console.info) {
+//   console.info = console.log;
+// }
+
+// // Set up process.env defaults that the plugin might expect
+// process.env.NODE_ENV = process.env.NODE_ENV || 'development';
+
+// console.log('🔧 Environment setup complete');
+// console.log('✅ http module available:', typeof globalThis_any.http?.get);
+// console.log('✅ console.info available:', typeof console.info);
+
+// // Now import the Teams MCP plugin
+// import { McpPlugin } from '@microsoft/teams.mcp';
+// import { z } from 'zod';
+
+// // Create the MCP plugin with minimal configuration
+// export const mcpServerPlugin = new McpPlugin({
+//   name: 'devxCommunityInsights',
+//   description: 'Provides developer community insights like GitHub issues and StackOverflow discussions'
+//   // Don't include inspector initially to avoid SSE issues
+// });
+
+// // Add tools to the plugin
+// mcpServerPlugin.tool(
+//   'echo',
+//   'Echoes back whatever input is given',
+//   {
+//     input: z.string().describe('The text to echo back')
+//   },
+//   {
+//     title: "Echo Utility",
+//     idempotentHint: true
+//   },
+//   async ({ input }) => ({
+//     content: [{ type: 'text', text: `You said: "${input}"` }]
+//   })
+// );
+
+// // Add a GitHub issues tool
+// mcpServerPlugin.tool(
+//   'get_github_issues',
+//   'Get GitHub issues for a repository',
+//   {
+//     repository: z.string().describe('Repository in format owner/repo'),
+//     state: z.enum(['open', 'closed', 'all']).optional().default('open')
+//   },
+//   {
+//     title: "GitHub Issues",
+//     idempotentHint: false
+//   },
+//   async ({ repository, state = 'open' }) => {
+//     // Mock response for now - you can integrate with actual GitHub API later
+//     const mockIssues = [
+//       {
+//         number: 1,
+//         title: 'Sample Issue',
+//         state: state,
+//         created_at: new Date().toISOString()
+//       }
+//     ];
+
+//     return {
+//       content: [{
+//         type: 'text',
+//         text: `Found ${mockIssues.length} ${state} issues in ${repository}:\n\n${mockIssues
+//           .map(issue => `#${issue.number}: ${issue.title}`)
+//           .join('\n')}`
+//       }]
+//     };
+//   }
+// );
+
+// console.log('🚀 MCP Plugin Server starting on port 9000...');
+
+// // Try a more gradual startup approach
+// async function startServer() {
+//   try {
+//     // Start without onInit first
+//     console.log('📡 Starting MCP server...');
+//     await mcpServerPlugin.onStart({ port: 9000 });
+//     console.log('✅ MCP Server started successfully on port 9000');
+    
+//     // Optionally try to initialize after startup
+//     try {
+//       console.log('🔄 Attempting initialization...');
+//       await mcpServerPlugin.onInit();
+//       console.log('✅ MCP Server initialized successfully');
+//     } catch (initError) {
+//       console.warn('⚠️ Initialization failed, but server is running:', initError.message);
+//     }
+    
+//   } catch (error) {
+//     console.error('❌ Failed to start MCP server:', error);
+    
+//     // Fallback: try with different configuration
+//     console.log('🔄 Attempting fallback startup...');
+//     try {
+//       const fallbackPlugin = new McpPlugin({
+//         name: 'devxCommunityInsights',
+//         description: 'Provides developer community insights'
+//       });
+      
+//       await fallbackPlugin.onStart({ port: 9001 });
+//       console.log('✅ Fallback server started on port 9001');
+//     } catch (fallbackError) {
+//       console.error('❌ Fallback also failed:', fallbackError);
+//       process.exit(1);
+//     }
+//   }
+// }
+
+// startServer();
+
+
+// // mcp/server.ts
+
+// import * as http from 'http';
+// import { z } from 'zod';
+
+// // Make http available globally
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// (globalThis as any).http = http;
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// (global as any).http = http;
+
+// import { McpPlugin } from '@microsoft/teams.mcp';
+
+// export const mcpServerPlugin = new McpPlugin({
+//   name: 'mcpServer',
+//   description: 'Provides developer community insights like GitHub issues and StackOverflow discussions'
+//   // Remove inspector to avoid SSE initialization
+// })
+// .tool(
+//   'echo',
+//   'Echoes back whatever input is given',
+//   {
+//     input: z.string().describe('The text to echo')
+//   },
+//   {
+//     title: "Echo Utility",
+//     idempotentHint: true
+//   },
+//   async ({ input }) => ({
+//     content: [{ type: 'text', text: `You said "${input}"` }]
+//   })
+// );
+
+// console.log('🚀 MCP Plugin Server starting on port 9000...');
+
+// // Skip onInit() which is causing the SSE error
+// // Just start the server directly
+// try {
+//   mcpServerPlugin.onStart({ port: 9000 });
+//   console.log('✅ Server started successfully on port 9000');
+// } catch (error) {
+//   console.error('❌ Error starting server:', error);
+// }
+
+
+// // // mcp/server.ts
+
+// // Full polyfill approach - make all Node.js modules available globally
+// import * as http from 'http';
+// import * as https from 'https';
+// import * as url from 'url';
+
+// // Make Node.js modules available globally for the plugin
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// const globalScope = globalThis as any;
+// globalScope.http = http;
+// globalScope.https = https;
+// globalScope.url = url;
+
+// // Debug what's available
+// console.log('http module:', typeof http);
+// console.log('http.get:', typeof http.get);
+
+// // Make http available globally
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// (globalThis as any).http = http;
+
+// // Verify it's available globally
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// console.log('globalThis.http:', typeof (globalThis as any).http);
+// // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// console.log('globalThis.http.get:', typeof (globalThis as any).http?.get);
+
+
+// // mcp/server.ts
+// import { McpPlugin } from '@microsoft/teams.mcp';
+// import { z } from 'zod';
+
+
+// // function injectHttpShim() {
+// //   const localRequire = createRequire(import.meta.url);
+// //   const http = localRequire('http');
+// //   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// //   (globalThis as any).http = http;
+// // }
+
+// // injectHttpShim(); // 🛠 Run BEFORE importing the plugin internals
+
+// export const mcpServerPlugin = new McpPlugin({
+//   name: 'mcpServer',
+//   description: 'Provides developer community insights like GitHub issues and StackOverflow discussions',
+//   inspector: 'http://localhost:5173?proxyPort=9000' // Optional for local MCP DevTools
+// })
+// .tool(
+//   'echo',
+//   'Echoes back whatever input is given',
+//   {
+//     input: z.string().describe('The text to echo')
+//   },
+//   {
+//   title: "Echo Utility",
+//   idempotentHint: true
+//   }, // <- Add empty annotations object if no hints
+//   async ({ input }) => ({
+//     content: [{ type: 'text', text: `You said "${input}"` }]
+//   })
+// );
+
+// // ✅ Starts the internal HTTP plugin and exposes `/mcp`
+// console.log('🚀 MCP Plugin Server starting on port 9000...');
+
+// try {
+//   mcpServerPlugin.onInit();
+//   mcpServerPlugin.onStart({ port: 9000 });
+// } catch (error) {
+//   console.error('Error starting server:', error);
+// }
